@@ -1,0 +1,6 @@
+pandas
+streamlit
+scipy
+numpy
+openpyxl # For reading/writing Excel files
+xlsxwriter # For writing Excel files

@@ -100,38 +100,11 @@ def main():
             st.session_state.file_processed = False
 
     if st.session_state.analysis_results_df is not None and st.session_state.file_processed:
-        st.markdown("---")
-        st.subheader("\U0001F4CA Analysis Results")
-
-        st.dataframe(st.session_state.analysis_results_df, use_container_width=True)
         
-        # Top 10 Customers by Revenue Contribution
+        
+                # -------------------- Revenue Metrics --------------------
         st.markdown("---")
-        st.subheader("🏆 Top Customers Caused Revenue Changes")
-
-        top_customers_df = st.session_state.analysis_results_df
-        revenue_cols = [col for col in top_customers_df.columns if col.startswith('Total Revenue')]
-
-        if revenue_cols:
-            top_customers_df = top_customers_df[['Customer Code', 'Customer Ranking'] + revenue_cols]
-            top_customers_df = top_customers_df[top_customers_df['Customer Ranking'].notna()]
-            top_customers_df = top_customers_df[top_customers_df['Customer Ranking'].notnull()]
-            top_customers_df = top_customers_df[top_customers_df['Customer Ranking'].astype(str).str.strip() != '']
-
-            try:
-                top_customers_summary = (
-                    top_customers_df
-                    .groupby(['Customer Ranking','Customer Code'], as_index=False)
-                    .agg({revenue_cols[0]: 'sum', revenue_cols[1]: 'sum'})
-                )
-                st.dataframe(top_customers_summary)
-            except Exception as e:
-                st.error(f"Error during summary creation: {e}")
-        else:
-            st.error("No column starting with 'Total Revenue' was found.")
-
-        st.markdown("---")
-        st.subheader("\U0001F4C8 Monthly Revenue Trends")
+        st.subheader("📈 Monthly Revenue Trends")
 
         summary = st.session_state.monthly_revenue_summary
         older_month = summary['older_month_name']
@@ -147,28 +120,88 @@ def main():
             delta_color = "inverse" if total_rev_diff < 0 else "normal"
             col_trend3.metric("\U0001F4C9 Overall Difference", f"{total_rev_diff:,.0f}", delta=f"{total_rev_diff:,.0f}", delta_color=delta_color)
 
-        st.markdown("### \U0001F5C3 Revenue Grouped by Change Type")
+        # -------------------- Tables Side by Side --------------------
+        st.markdown("---")
+        st.subheader("📊 Revenue Breakdown Summary")
 
-        revenue_by_type_data = []
-        all_change_types = sorted(list(set(summary['older_revenue_by_change_type'].keys()) | set(summary['recent_revenue_by_change_type'].keys())))
+        col1, col2 = st.columns(2)
 
-        for c_type in all_change_types:
-            older_rev = summary['older_revenue_by_change_type'].get(c_type, 0)
-            recent_rev = summary['recent_revenue_by_change_type'].get(c_type, 0)
-            diff_rev = recent_rev - older_rev
-            revenue_by_type_data.append({
-                'Change Type': c_type,
-                f'Revenue ({older_month})': older_rev,
-                f'Revenue ({recent_month})': recent_rev,
-                'Difference': diff_rev
-            })
+        # -------- LEFT: Top Customers Summary Table --------
+        with col1:
+            st.markdown("#### 🏆 Top Customers Caused Revenue Changes")
+            top_customers_df = st.session_state.analysis_results_df
+            revenue_cols = [col for col in top_customers_df.columns if col.startswith('Total Revenue')]
 
-        revenue_by_type_df = pd.DataFrame(revenue_by_type_data)
-        styled_df = revenue_by_type_df.style.applymap(highlight_negative, subset=["Difference"])
+            if revenue_cols:
+                top_customers_df = top_customers_df[['Customer Code', 'Customer Ranking'] + revenue_cols]
+                top_customers_df = top_customers_df[top_customers_df['Customer Ranking'].notna()]
+                top_customers_df = top_customers_df[top_customers_df['Customer Ranking'].astype(str).str.strip() != '']
 
-        num_rows = revenue_by_type_df.shape[0]
-        row_height = 35
-        st.dataframe(styled_df, height=row_height * (num_rows + 1), use_container_width=True)
+                try:
+                    for col in revenue_cols:
+                        top_customers_df[col] = top_customers_df[col] / 1_000_000
+
+                    # Group and summarize revenue
+                    top_customers_summary = (
+                        top_customers_df
+                        .groupby(['Customer Ranking', 'Customer Code'], as_index=False)
+                        .agg({revenue_cols[0]: 'sum', revenue_cols[1]: 'sum'})
+                    )
+
+                    # Add Difference column
+                    top_customers_summary["Difference"] = top_customers_summary[revenue_cols[1]] - top_customers_summary[revenue_cols[0]]
+
+                    # Format columns
+                    formatted_top_customers_summary = top_customers_summary.style.format({
+                        revenue_cols[0]: '{:,.2f}',
+                        revenue_cols[1]: '{:,.2f}',
+                        'Difference': '{:,.2f}'
+                    }).applymap(highlight_negative, subset=["Difference"])
+
+                    st.dataframe(formatted_top_customers_summary, use_container_width=False)
+
+                except Exception as e:
+                    st.error(f"Error during summary creation: {e}")
+            else:
+                st.error("No column starting with 'Total Revenue' was found.")
+
+
+        # -------- RIGHT: Revenue by Change Type Table --------
+        with col2:
+            st.markdown("#### 🗂️ Revenue Grouped by Change Type")
+            revenue_by_type_data = []
+            all_change_types = sorted(list(set(summary['older_revenue_by_change_type'].keys()) | set(summary['recent_revenue_by_change_type'].keys())))
+
+            for c_type in all_change_types:
+                older_rev = summary['older_revenue_by_change_type'].get(c_type, 0) / 1_000_000
+                recent_rev = summary['recent_revenue_by_change_type'].get(c_type, 0) / 1_000_000
+                diff_rev = recent_rev - older_rev
+                revenue_by_type_data.append({
+                    'Change Type': c_type,
+                    f'Revenue ({older_month})': older_rev,
+                    f'Revenue ({recent_month})': recent_rev,
+                    'Difference': diff_rev,
+                })
+
+            revenue_by_type_df = pd.DataFrame(revenue_by_type_data)
+            revenue_by_type_df = revenue_by_type_df.round(2)
+
+            formatted_df = revenue_by_type_df.style \
+                .format({
+                    f'Revenue ({older_month})': '{:,.2f}',
+                    f'Revenue ({recent_month})': '{:,.2f}',
+                    'Difference': '{:,.2f}'
+                }) \
+                .applymap(highlight_negative, subset=["Difference"])
+
+            num_rows = revenue_by_type_df.shape[0]
+            row_height = 35
+            st.dataframe(formatted_df, height=row_height * (num_rows + 1), use_container_width=False)
+
+
+        # -------------------- Revenue Charts --------------------
+
+        st.markdown("---")
 
         col1, col2 = st.columns(2)
 
@@ -203,6 +236,15 @@ def main():
                 stroke=None
             )
             st.altair_chart(chart, use_container_width=True)
+
+        # -------------------- Analysis Results --------------------
+        
+        st.markdown("---")
+        st.subheader("\U0001F4CA Analysis Results")
+
+        st.dataframe(st.session_state.analysis_results_df, use_container_width=True)
+
+        # -------------------- Download Options --------------------
 
         st.markdown("---")
         st.subheader("\U0001F4E5 Download Results")

@@ -45,9 +45,9 @@ def analyze_monthly_billing_v3(df: pd.DataFrame, progress_queue: Optional[queue.
     for tag in EXCLUDED_TAGS:
         older_tag_revenue = df_o[df_o['Analysis Remark'] == tag]['Total Revenue'].sum()
         recent_tag_revenue = df_r[df_r['Analysis Remark'] == tag]['Total Revenue'].sum()
-        if older_tag_revenue > 0:
+        if older_tag_revenue != 0:
             monthly_revenue_summary['older_revenue_by_change_type'][tag] = older_tag_revenue
-        if recent_tag_revenue > 0:
+        if recent_tag_revenue != 0:
             monthly_revenue_summary['recent_revenue_by_change_type'][tag] = recent_tag_revenue
 
 

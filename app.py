@@ -5,7 +5,9 @@ import time
 import os
 import queue
 import threading
-from typing import Tuple, Any
+from typing import Tuple, Any, Dict
+import io
+import altair as alt
 
 # Import the analysis functions from the engine file
 from billing_analysis_engine import analyze_and_highlight_billing
@@ -26,14 +28,14 @@ def run_analysis_in_thread(df: pd.DataFrame, top_n: int, progress_queue: queue.Q
     sending progress updates to the main thread via the queue.
     """
     try:
-        result_df = analyze_and_highlight_billing(df, top_n=top_n, progress_queue=progress_queue)
-        progress_queue.put(('complete', result_df))
+        result_df, revenue_summary = analyze_and_highlight_billing(df, top_n=top_n, progress_queue=progress_queue)
+        progress_queue.put(('complete', result_df, revenue_summary))
     except Exception as e:
         progress_queue.put(('error', str(e)))
 
-def display_progress(progress_bar: st.delta_generator.DeltaGenerator, status_text: st.delta_generator.DeltaGenerator) -> pd.DataFrame:
+def display_progress(progress_bar: st.delta_generator.DeltaGenerator, status_text: st.delta_generator.DeltaGenerator) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Displays progress updates received from the queue.
+    Displays progress updates received from the queue and returns the result DataFrame and revenue summary.
     """
     while True:
         try:
@@ -46,7 +48,7 @@ def display_progress(progress_bar: st.delta_generator.DeltaGenerator, status_tex
             elif message[0] == 'complete':
                 progress_bar.progress(1.0)
                 status_text.text("Analysis complete!")
-                return message[1] # Return the result DataFrame
+                return message[1], message[2] # Return the result DataFrame and revenue summary
             elif message[0] == 'error':
                 raise Exception(message[1])
             progress_queue.task_done()
@@ -60,6 +62,7 @@ def main():
     # Initialize session state for persistent results
     if 'analysis_results_df' not in st.session_state:
         st.session_state.analysis_results_df = None
+        st.session_state.monthly_revenue_summary = None
         st.session_state.file_processed = False
         st.session_state.timestamp = str(int(time.time())) # Unique identifier for temp files
 
@@ -119,20 +122,23 @@ def main():
 
         # Display progress in the main thread and wait for completion
         try:
-            final_result_df = display_progress(progress_bar, status_text)
+            final_result_df, final_revenue_summary = display_progress(progress_bar, status_text)
             analysis_thread.join() # Wait for the thread to finish
 
             if 'Error' in final_result_df.columns:
                 st.error(f"Analysis Error: {final_result_df['Error'].iloc[0]}")
                 st.session_state.analysis_results_df = None # Clear results on error
+                st.session_state.monthly_revenue_summary = None
                 st.session_state.file_processed = False
             else:
                 st.session_state.analysis_results_df = final_result_df
+                st.session_state.monthly_revenue_summary = final_revenue_summary
                 st.session_state.file_processed = True
                 result_placeholder.success("✅ Analysis completed successfully!")
         except Exception as e:
             st.error(f"❌ An error occurred during analysis: {e}")
             st.session_state.analysis_results_df = None
+            st.session_state.monthly_revenue_summary = None
             st.session_state.file_processed = False
 
     # Display Results and Download Button
@@ -142,16 +148,78 @@ def main():
         # Display key metrics
         total_records = len(st.session_state.analysis_results_df)
         total_customers = st.session_state.analysis_results_df['Customer Code'].nunique()
-        ranked_customers = st.session_state.analysis_results_df[st.session_state.analysis_results_df['Customer Ranking'] != '']['Customer Code'].nunique()
+        ranked_customers = st.session_state.analysis_results_df[st.session_state.analysis_results_df['Customer Ranking'] != ''].shape[0]
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Analyzed Records", total_records)
         col2.metric("Unique Customer Codes", total_customers)
         col3.metric("Ranked Customers", ranked_customers)
 
-        st.dataframe(st.session_state.analysis_results_df)
+        st.dataframe(st.session_state.analysis_results_df, use_container_width=True)
 
-        # Download Buttons
+        st.markdown("---")
+        st.subheader("📈 Monthly Revenue Trends")
+
+        if st.session_state.monthly_revenue_summary:
+            summary = st.session_state.monthly_revenue_summary
+            older_month = summary['older_month_name']
+            recent_month = summary['recent_month_name']
+            older_total_rev = summary['older_total_revenue']
+            recent_total_rev = summary['recent_total_revenue']
+            total_rev_diff = recent_total_rev - older_total_rev
+
+            col_trend1, col_trend2, col_trend3 = st.columns(3)
+            with col_trend1:
+                st.metric(f"Total Revenue ({older_month})", f"{older_total_rev:,.0f}")
+            with col_trend2:
+                st.metric(f"Total Revenue ({recent_month})", f"{recent_total_rev:,.0f}")
+            with col_trend3:
+                st.metric("Overall Difference", f"{total_rev_diff:,.0f}", delta=f"{total_rev_diff:,.0f}")
+
+            st.markdown(f"**Revenue Grouped by Change Type**")
+
+            # Create a DataFrame for display
+            revenue_by_type_data = []
+            all_change_types = sorted(list(set(summary['older_revenue_by_change_type'].keys()) | set(summary['recent_revenue_by_change_type'].keys())))
+
+            for c_type in all_change_types:
+                older_rev = summary['older_revenue_by_change_type'].get(c_type, 0)
+                recent_rev = summary['recent_revenue_by_change_type'].get(c_type, 0)
+                diff_rev = recent_rev - older_rev
+                revenue_by_type_data.append({
+                    'Change Type': c_type,
+                    f'Revenue ({older_month})': older_rev,
+                    f'Revenue ({recent_month})': recent_rev,
+                    'Difference': diff_rev
+                })
+            
+            revenue_by_type_df = pd.DataFrame(revenue_by_type_data)
+            st.dataframe(revenue_by_type_df, use_container_width=True)
+            
+            # Bar chart for visualization
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown(f"**Monthly Revenue by Change Type**")
+                st.bar_chart(
+                    revenue_by_type_df.set_index('Change Type')[[f'Revenue ({older_month})', f'Revenue ({recent_month})']],
+                    height=400
+                )
+
+            chart = alt.Chart(revenue_by_type_df).mark_bar().encode(
+                x=alt.X('Change Type:N'),
+                y=alt.Y('Difference:Q'),
+                color=alt.condition(
+                    alt.datum.Difference >= 0,
+                    alt.value('#4CAF50'),  # green
+                    alt.value('#F44336')   # red
+                )
+            ).properties(height=400)
+
+            with col2:
+                st.markdown("**Revenue Difference by Change Type**")
+                st.altair_chart(chart, use_container_width=True)
+
         st.markdown("---")
         st.subheader("Download Results")
         col_dl_csv, col_dl_xlsx = st.columns(2)
@@ -183,11 +251,10 @@ def main():
         # Clear Results Button
         if st.button("🔄 Clear Results and Reset", key="clear_results_button"):
             st.session_state.analysis_results_df = None
+            st.session_state.monthly_revenue_summary = None
             st.session_state.file_processed = False
             st.session_state.timestamp = str(int(time.time()))
             st.rerun() # Rerun to clear the UI
 
 if __name__ == "__main__":
-    # Ensure 'io' module is imported for BytesIO
-    import io 
     main()

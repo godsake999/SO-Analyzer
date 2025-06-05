@@ -107,7 +107,7 @@ def main():
         
         # Top 10 Customers by Revenue Contribution
         st.markdown("---")
-        st.subheader("🏆 Top Customers by Revenue Contribution")
+        st.subheader("🏆 Top Customers Caused Revenue Changes")
 
         top_customers_df = st.session_state.analysis_results_df
         revenue_cols = [col for col in top_customers_df.columns if col.startswith('Total Revenue')]
@@ -180,7 +180,7 @@ def main():
             ], as_=['Month', 'Value']).mark_bar().encode(
                 x=alt.X('Change Type:N', title=None),
                 y=alt.Y('Value:Q'),
-                color=alt.Color('Month:N', scale=alt.Scale(range=['#90CAF9', '#1565C0']))
+                color=alt.Color('Month:N', scale=alt.Scale(range=['#90CAF9', '#1565C0']), legend=alt.Legend(orient='bottom'))
             ).properties(height=400)
             st.altair_chart(base_chart, use_container_width=True)
 
